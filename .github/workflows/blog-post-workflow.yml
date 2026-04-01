@@ -1,0 +1,22 @@
+name: Latest blog post workflow
+on:
+  schedule:
+    # Runs every hour to check for new posts
+    - cron: '0 * * * *'
+  workflow_dispatch: # Allows manual trigger
+
+jobs:
+  update-readme-with-blog:
+    name: Update README with latest blog posts
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Pull in Substack posts
+        uses: gautamkrishnar/blog-post-workflow@v1
+        with:
+          feed_list: "https://tosingularity.substack.com/feed"
+          max_post_count: 5
+          template: "- [$title]($url) — $date"
+          date_format: "mmm d, yyyy"
