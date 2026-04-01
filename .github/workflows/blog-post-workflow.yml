@@ -13,39 +13,63 @@ jobs:
 
       - name: Fetch Substack RSS and update README
         run: |
-          # Fetch RSS feed
-          curl -s -A "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36" \
-            "https://tosingularity.substack.com/feed" -o feed.xml
+          # Try fetching RSS - Substack blocks some IPs, so we handle failure gracefully
+          HTTP_CODE=$(curl -s -o feed.xml -w "%{http_code}" \
+            -A "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36" \
+            -H "Accept: application/rss+xml,application/xml,text/xml" \
+            "https://tosingularity.substack.com/feed")
+          
+          if [ "$HTTP_CODE" != "200" ]; then
+            echo "Substack returned HTTP $HTTP_CODE - skipping update (IP may be blocked)"
+            exit 0
+          fi
+          
+          # Check if it's valid XML (not an HTML error page)
+          if ! head -1 feed.xml | grep -q "<?xml"; then
+            echo "Response is not valid XML - skipping update"
+            exit 0
+          fi
           
           # Parse and format posts using Python
           python3 << 'EOF'
           import xml.etree.ElementTree as ET
           from datetime import datetime
           import re
+          import sys
 
-          tree = ET.parse('feed.xml')
-          root = tree.getroot()
+          try:
+              tree = ET.parse('feed.xml')
+              root = tree.getroot()
+          except ET.ParseError as e:
+              print(f"XML parse error: {e} - skipping update")
+              sys.exit(0)
           
           posts = []
           for item in root.findall('.//item')[:5]:
               title = item.find('title').text
               link = item.find('link').text
               pub_date = item.find('pubDate').text
-              # Parse date: "Mon, 23 Feb 2026 10:24:00 GMT"
               dt = datetime.strptime(pub_date, "%a, %d %b %Y %H:%M:%S %Z")
               formatted_date = dt.strftime("%b %d, %Y")
               posts.append(f"- [{title}]({link}) — {formatted_date}")
           
+          if not posts:
+              print("No posts found - skipping update")
+              sys.exit(0)
+              
           posts_md = "\n".join(posts)
           
-          # Read current README
           with open('README.md', 'r') as f:
               readme = f.read()
           
-          # Replace the blog section
-          pattern = r'(## 📝 Latest Blog Posts.*?\n).*?(▶️)'
-          replacement = f"\\1{posts_md}\n\n\\2"
+          # Find the blog posts section and replace it
+          pattern = r'(## 📝 Latest Blog Posts.*?\n\[📚 Link to more posts\].*?\n\n).*?(\n## 🔗)'
+          replacement = f"\\1{posts_md}\n\\2"
           new_readme = re.sub(pattern, replacement, readme, flags=re.DOTALL)
+          
+          if new_readme == readme:
+              print("No changes detected")
+              sys.exit(0)
           
           with open('README.md', 'w') as f:
               f.write(new_readme)
@@ -54,7 +78,7 @@ jobs:
           print(posts_md)
           EOF
           
-          rm feed.xml
+          rm -f feed.xml
 
       - name: Commit and push if changed
         run: |
