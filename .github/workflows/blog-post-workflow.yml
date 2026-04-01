@@ -1,24 +1,64 @@
-name: Latest blog post workflow
+name: Update blog posts from Substack
 on:
   schedule:
-    # Runs every hour to check for new posts
-    - cron: '0 * * * *'
-  workflow_dispatch: # Allows manual trigger
+    # Runs every 6 hours
+    - cron: '0 */6 * * *'
+  workflow_dispatch:
 
 jobs:
-  update-readme-with-blog:
-    name: Update README with latest blog posts
+  update-readme:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      - name: Pull in Substack posts
-        uses: gautamkrishnar/blog-post-workflow@v1
-        with:
-          feed_list: "https://tosingularity.substack.com/feed"
-          max_post_count: 5
-          template: "- [$title]($url) — $date"
-          date_format: "mmm d, yyyy"
-          user_agent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-          accept_header: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"
+      - name: Fetch Substack RSS and update README
+        run: |
+          # Fetch RSS feed
+          curl -s -A "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36" \
+            "https://tosingularity.substack.com/feed" -o feed.xml
+          
+          # Parse and format posts using Python
+          python3 << 'EOF'
+          import xml.etree.ElementTree as ET
+          from datetime import datetime
+          import re
+
+          tree = ET.parse('feed.xml')
+          root = tree.getroot()
+          
+          posts = []
+          for item in root.findall('.//item')[:5]:
+              title = item.find('title').text
+              link = item.find('link').text
+              pub_date = item.find('pubDate').text
+              # Parse date: "Mon, 23 Feb 2026 10:24:00 GMT"
+              dt = datetime.strptime(pub_date, "%a, %d %b %Y %H:%M:%S %Z")
+              formatted_date = dt.strftime("%b %d, %Y")
+              posts.append(f"- [{title}]({link}) — {formatted_date}")
+          
+          posts_md = "\n".join(posts)
+          
+          # Read current README
+          with open('README.md', 'r') as f:
+              readme = f.read()
+          
+          # Replace the blog section
+          pattern = r'(## 📝 Latest Blog Posts.*?\n).*?(▶️)'
+          replacement = f"\\1{posts_md}\n\n\\2"
+          new_readme = re.sub(pattern, replacement, readme, flags=re.DOTALL)
+          
+          with open('README.md', 'w') as f:
+              f.write(new_readme)
+          
+          print("Updated posts:")
+          print(posts_md)
+          EOF
+          
+          rm feed.xml
+
+      - name: Commit and push if changed
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add README.md
+          git diff --staged --quiet || (git commit -m "Update blog posts from Substack" && git push)
